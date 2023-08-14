@@ -3995,12 +3995,12 @@ void linked_option_space_foreach (struct packet *packet, struct lease *lease,
 	}
 }
 
-void do_packet (interface, packet, len, from_port, from, hfrom)
+void do_packet (interface, packet, len, from_port, from, to, hfrom)
 	struct interface_info *interface;
 	struct dhcp_packet *packet;
 	unsigned len;
 	unsigned int from_port;
-	struct iaddr from;
+	struct iaddr from, to;
 	struct hardware *hfrom;
 {
 	struct option_cache *op;
@@ -4022,6 +4022,7 @@ void do_packet (interface, packet, len, from_port, from, hfrom)
 	decoded_packet->packet_length = len;
 	decoded_packet->client_port = from_port;
 	decoded_packet->client_addr = from;
+	decoded_packet->to = to;
 	interface_reference(&decoded_packet->interface, interface, MDL);
 	decoded_packet->haddr = hfrom;
 

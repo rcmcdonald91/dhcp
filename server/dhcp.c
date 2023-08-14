@@ -4084,22 +4084,26 @@ void dhcp_reply (lease)
 		else
 			to.sin_port = remote_port; /* For debugging. */
 
-		if (fallback_interface) {
-			result = send_packet(fallback_interface, NULL, &raw,
-					     packet_length, raw.siaddr, &to,
-					     NULL);
-			if (result < 0) {
-				log_error ("%s:%d: Failed to send %d byte long "
-					   "packet over %s interface.", MDL,
-					   packet_length,
-					   fallback_interface->name);
+		/* now we find the socket to send via based on the packet dst address */
+		struct interface_info *fbif = NULL;
+		for (fbif = state->ip->fallback_interfaces; fbif != NULL; fbif = fbif->next) {
+			if ((fbif->address_count > 0) &&
+			    (!memcmp(&fbif->addresses[0].s_addr, lease->state->packet->to.iabuf, 4))) {
+				result = send_packet(fbif, NULL, &raw, packet_length,
+						     raw.siaddr, &to, NULL);
+
+				if (result < 0) {
+					log_error("%s:%d: Failed to send %d byte long "
+						  "packet over %s interface.", MDL,
+						  packet_length, fbif);
+				}
+				break;
 			}
-
-
-			free_lease_state (state, MDL);
-			lease -> state = (struct lease_state *)0;
-			return;
 		}
+
+		free_lease_state (state, MDL);
+		lease -> state = (struct lease_state *)0;
+		return;
 
 	/* If the client is RENEWING, unicast to the client using the
 	   regular IP stack.  Some clients, particularly those that
@@ -4122,21 +4126,26 @@ void dhcp_reply (lease)
 		to.sin_addr = raw.ciaddr;
 		to.sin_port = remote_port;
 
-		if (fallback_interface) {
-			result = send_packet(fallback_interface, NULL, &raw,
-					     packet_length, raw.siaddr, &to,
-					     NULL);
-			if (result < 0) {
-				log_error("%s:%d: Failed to send %d byte long"
-					  " packet over %s interface.", MDL,
-					   packet_length,
-					   fallback_interface->name);
-			}
+		/* now we find the socket to send via based on the packet dst address */
+		struct interface_info *fbif = NULL;
+		for (fbif = state->ip->fallback_interfaces; fbif != NULL; fbif = fbif->next) {
+			if ((fbif->address_count > 0) &&
+			    (!memcmp(&fbif->addresses[0].s_addr, lease->state->packet->to.iabuf, 4))) {
+				result = send_packet(fbif, NULL, &raw, packet_length,
+						     raw.siaddr, &to, NULL);
 
-			free_lease_state (state, MDL);
-			lease -> state = (struct lease_state *)0;
-			return;
+				if (result < 0) {
+					log_error("%s:%d: Failed to send %d byte long "
+						  "packet over %s interface.", MDL,
+						  packet_length, fbif);
+				}
+				break;
+			}
 		}
+
+		free_lease_state (state, MDL);
+		lease -> state = (struct lease_state *)0;
+		return;
 
 	/* If it comes from a client that already knows its address
 	   and is not requesting a broadcast response, and we can

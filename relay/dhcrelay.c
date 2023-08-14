@@ -133,7 +133,7 @@ char *dhcrelay_sub_id = NULL;
 
 #ifndef UNIT_TEST
 static void do_relay4(struct interface_info *, struct dhcp_packet *,
-	              unsigned int, unsigned int, struct iaddr,
+	              unsigned int, unsigned int, struct iaddr, struct iaddr,
 		      struct hardware *);
 #endif /* UNIT_TEST */
 
@@ -148,7 +148,7 @@ extern int strip_relay_agent_options(struct interface_info *,
 				              struct dhcp_packet *, unsigned);
 
 #ifndef UNIT_TEST
-static void request_v4_interface(const char* name, int flags);
+static void request_v4_interface(const char* name, const char* listen_address, int flags);
 
 static const char copyright[] =
 "Copyright 2004-2022 Internet Systems Consortium.";
@@ -168,9 +168,9 @@ char *progname;
 "                     [-p <port> | -rp <relay-port>]\n" \
 "                     [-pf <pid-file>] [--no-pid]\n"\
 "                     [-m append|replace|forward|discard]\n" \
-"                     [-i interface0 [ ... -i interfaceN]\n" \
-"                     [-iu interface0 [ ... -iu interfaceN]\n" \
-"                     [-id interface0 [ ... -id interfaceN]\n" \
+"                     [-i interface0[/listen-address] [ ... -i interfaceN[/listen-address]]\n" \
+"                     [-iu interface0[/listen-address] [ ... -iu interfaceN[/listen-address]]\n" \
+"                     [-id interface0[/listen-address] [ ... -id interfaceN[/listen-address]]\n" \
 "                     [-U interface] [-g <ip-address>]\n" \
 "                     server0 [ ... serverN]\n\n" \
 "       %s -6   [-d] [-q] [-I] [-c <hops>]\n" \
@@ -283,7 +283,7 @@ main(int argc, char **argv) {
 	isc_result_t status;
 	struct servent *ent;
 	struct server_list *sp = NULL;
-	char *service_local = NULL, *service_remote = NULL;
+	char *service_local = NULL, *service_remote = NULL, *ifname = NULL;
 	u_int16_t port_local = 0, port_remote = 0;
 	int quiet = 0;
 	int fd;
@@ -445,7 +445,8 @@ main(int argc, char **argv) {
 				usage(use_noarg, argv[i-1]);
 			}
 
-			request_v4_interface(argv[i], INTERFACE_STREAMS);
+			ifname = strsep(&argv[i], "/");
+			request_v4_interface(ifname, argv[i], INTERFACE_STREAMS);
 		} else if (!strcmp(argv[i], "-iu")) {
 #ifdef DHCPv6
 			if (local_family_set && (local_family == AF_INET6)) {
@@ -457,8 +458,9 @@ main(int argc, char **argv) {
 			if (++i == argc) {
 				usage(use_noarg, argv[i-1]);
 			}
-
-			request_v4_interface(argv[i], INTERFACE_UPSTREAM);
+			
+			ifname = strsep(&argv[i], "/");
+			request_v4_interface(ifname, argv[i], INTERFACE_UPSTREAM);
 		} else if (!strcmp(argv[i], "-id")) {
 #ifdef DHCPv6
 			if (local_family_set && (local_family == AF_INET6)) {
@@ -471,7 +473,8 @@ main(int argc, char **argv) {
 				usage(use_noarg, argv[i-1]);
 			}
 
-			request_v4_interface(argv[i], INTERFACE_DOWNSTREAM);
+			ifname = strsep(&argv[i], "/");
+			request_v4_interface(ifname, argv[i], INTERFACE_DOWNSTREAM);
 		} else if (!strcmp(argv[i], "-a")) {
 #ifdef DHCPv6
 			if (local_family_set && (local_family == AF_INET6)) {
@@ -850,7 +853,7 @@ main(int argc, char **argv) {
 static void
 do_relay4(struct interface_info *ip, struct dhcp_packet *packet,
 	  unsigned int length, unsigned int from_port, struct iaddr from,
-	  struct hardware *hfrom) {
+	  struct iaddr tto, struct hardware *hfrom) {
 	struct server_list *sp;
 	struct sockaddr_in to;
 	struct interface_info *out;
@@ -2148,26 +2151,32 @@ dhcp_set_control_state(control_object_state_t oldstate,
  *
  * \return Nothing
  */
-void request_v4_interface(const char* name, int flags) {
+void request_v4_interface(const char* name, const char *listen_address, int flags) {
         struct interface_info *tmp = NULL;
-        int len = strlen(name);
+        int namelen = strlen(name);
         isc_result_t status;
 
-        if (len >= sizeof(tmp->name)) {
-                log_fatal("%s: interface name too long (is %d)", name, len);
+        if (namelen >= sizeof(tmp->name)) {
+                log_fatal("%s: interface name too long (is %d)", name, namelen);
         }
 
-        status = interface_allocate(&tmp, MDL);
-        if (status != ISC_R_SUCCESS) {
-                log_fatal("%s: interface_allocate: %s", name,
-                          isc_result_totext(status));
-        }
+	if (tmp == NULL) {
+		status = interface_allocate(&tmp, MDL);
+		if (status != ISC_R_SUCCESS) {
+			log_fatal("%s: interface_allocate: %s", name,
+				  isc_result_totext(status));
+		}
 
-	log_debug("Requesting: %s as upstream: %c downstream: %c", name,
-		  (flags & INTERFACE_UPSTREAM ? 'Y' : 'N'),
-		  (flags & INTERFACE_DOWNSTREAM ? 'Y' : 'N'));
+		log_debug("Requesting: %s as upstream: %c downstream: %c", name,
+			  (flags & INTERFACE_UPSTREAM ? 'Y' : 'N'),
+			  (flags & INTERFACE_DOWNSTREAM ? 'Y' : 'N'));
 
-        memcpy(tmp->name, name, len);
-        interface_snorf(tmp, (INTERFACE_REQUESTED | flags));
-        interface_dereference(&tmp, MDL);
+		strcpy(tmp->name, name);
+		interface_snorf(tmp, (INTERFACE_REQUESTED | flags));
+		interface_dereference(&tmp, MDL);
+	}
+
+	if (listen_address) {
+		log_info("Listen on %s", listen_address);
+	}
 }

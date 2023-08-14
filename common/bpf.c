@@ -439,11 +439,11 @@ ssize_t send_packet (interface, packet, raw, len, from, to, hto)
 #endif /* USE_BPF_SEND */
 
 #ifdef USE_BPF_RECEIVE
-ssize_t receive_packet (interface, buf, len, from, hfrom)
+ssize_t receive_packet (interface, buf, len, from, to, hfrom)
 	struct interface_info *interface;
 	unsigned char *buf;
 	size_t len;
-	struct sockaddr_in *from;
+	struct sockaddr_in *from, *to;
 	struct hardware *hfrom;
 {
 	int length = 0;
@@ -531,7 +531,7 @@ ssize_t receive_packet (interface, buf, len, from, hfrom)
 		/* Decode the IP and UDP headers... */
 		offset = decode_udp_ip_header(interface, interface->rbuf,
 					      interface->rbuf_offset,
-                                              from, hdr.bh_caplen, &paylen, 1);
+                                              from, to, hdr.bh_caplen, &paylen, 1);
 
 		/* If the IP or UDP checksum was bad, skip the packet... */
 		if (offset < 0) {
@@ -540,6 +540,33 @@ ssize_t receive_packet (interface, buf, len, from, hfrom)
 					      hdr.bh_caplen);
 			continue;
 		}
+
+		/*
+		 * This packet filtering logic should probably be patched into the filter
+		 * program at some point. This means we need to craft the filter program
+		 * in heap memory in order to dynamically splice in instructions to test
+		 * the dst address. This is only known at runtime. XXXRCM
+		 */
+
+		/* we always accept broadcast packets */
+		if (to->sin_addr.s_addr == htonl(INADDR_BROADCAST))
+			goto acceptpkt;
+
+		/* unicast packets need to be checked against the list of listen-address(es) */
+		struct interface_info *tmp = NULL;
+		for (tmp = interface->fallback_interfaces; tmp != NULL; tmp = tmp->next) {
+			if ((tmp->address_count > 0) &&
+			    tmp->addresses[0].s_addr == to->sin_addr.s_addr)
+				goto acceptpkt;
+		}
+
+		/* packet is not for us, skip the packet */
+		interface->rbuf_offset =
+				BPF_WORDALIGN(interface->rbuf_offset +
+					       hdr.bh_caplen);
+		continue;
+
+acceptpkt:
 		interface->rbuf_offset = interface->rbuf_offset + offset;
 		hdr.bh_caplen -= offset;
 
@@ -581,19 +608,24 @@ int supports_multiple_interfaces (ip)
 	return 1;
 }
 
-void maybe_setup_fallback ()
+void
+maybe_setup_fallback()
 {
 	isc_result_t status;
-	struct interface_info *fbi = (struct interface_info *)0;
-	if (setup_fallback (&fbi, MDL)) {
-		if_register_fallback (fbi);
-		status = omapi_register_io_object ((omapi_object_t *)fbi,
-						   if_readsocket, 0,
-						   fallback_discard, 0, 0);
-		if (status != ISC_R_SUCCESS)
-			log_fatal ("Can't register I/O handle for %s: %s",
-				   fbi -> name, isc_result_totext (status));
-		interface_dereference (&fbi, MDL);
+	struct interface_info *tmpif = NULL, *tmpfbif = NULL;
+
+	/* iterate over and register each fallback interface */
+	for (tmpif = interfaces; tmpif != NULL; tmpif = tmpif->next) {
+		for (tmpfbif = tmpif->fallback_interfaces; tmpfbif != NULL; tmpfbif = tmpfbif->next) {
+			if_register_fallback(tmpfbif);
+			status = omapi_register_io_object((omapi_object_t *)tmpfbif,
+							  if_readsocket, 0,
+							  fallback_discard, 0, 0);
+
+			if (status != ISC_R_SUCCESS)
+				log_fatal("Can't register I/O handle for %s: %s",
+					  tmpfbif->name, isc_result_totext(status));
+		}
 	}
 }
 #endif

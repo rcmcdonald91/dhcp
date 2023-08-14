@@ -70,7 +70,7 @@ int bind_local_address6 = 0;
 void (*bootp_packet_handler) (struct interface_info *,
 			      struct dhcp_packet *, unsigned,
 			      unsigned int,
-			      struct iaddr, struct hardware *);
+			      struct iaddr, struct iaddr, struct hardware *);
 
 #ifdef DHCPv6
 void (*dhcpv6_packet_handler)(struct interface_info *,
@@ -583,7 +583,7 @@ discover_interfaces(int state) {
 
 	struct subnet *subnet;
 	int ir;
-	isc_result_t status;
+	isc_result_t result, status;
 	int wifcount = 0;
 #ifdef RELAY_PORT
 	int updone = 0;
@@ -947,7 +947,7 @@ discover_interfaces(int state) {
 	 * we've already registered the fd or socket with the socket
 	 * manager as part of if_register_receive().
 	 */
-	for (tmp = interfaces; tmp; tmp = tmp -> next) {
+	for (tmp = interfaces; tmp; tmp = tmp->next) {
 		/* not if it's been registered before */
 		if (tmp -> flags & INTERFACE_RUNNING)
 			continue;
@@ -989,6 +989,26 @@ discover_interfaces(int state) {
 			else
 				downdone++;
 #endif
+			if (tmp->fallback_interfaces == NULL) {
+				for (int i = 0; i < tmp->v6address_count; i++) {
+					struct interface_info *tmpfbif = NULL;
+					result = interface_allocate(&tmpfbif, MDL);
+					if (result != ISC_R_SUCCESS)
+						log_fatal("Insufficient memory to %s %s: %s",
+							  "record interface", tmp->name,
+							  isc_result_totext(result));
+
+					strcpy(tmpfbif->name, "fallback");
+					add_ipv6_addr_to_interface(tmpfbif, &tmp->v6addresses[i]);
+
+					if (tmp->fallback_interfaces) {
+						interface_reference(&tmpfbif->next, tmp->fallback_interfaces, MDL);
+						interface_dereference(&tmp->fallback_interfaces, MDL);
+					}
+					interface_reference(&tmp->fallback_interfaces, tmpfbif, MDL);
+				}
+			}
+
 			break;
 #endif /* DHCPv6 */
 		case AF_INET:
@@ -996,6 +1016,32 @@ discover_interfaces(int state) {
 			status = omapi_register_io_object((omapi_object_t *)tmp,
 							  if_readsocket,
 							  0, got_one, 0, 0);
+
+			/*
+			 * If no listen-address(es) were requested during startup, just copy
+			 * all discovered addresses into the fallback interfaces list. Each one
+			 * represents a socket that can be used for unicast send/receive.
+			 * */
+			if (tmp->fallback_interfaces == NULL) {
+				for (int i = 0; i < tmp->address_count; i++) {
+					struct interface_info *tmpfbif = NULL;
+					result = interface_allocate(&tmpfbif, MDL);
+					if (result != ISC_R_SUCCESS)
+						log_fatal("Insufficient memory to %s %s: %s",
+							  "record interface", tmp->name,
+							  isc_result_totext(result));
+
+					strcpy(tmpfbif->name, "fallback");
+					add_ipv4_addr_to_interface(tmpfbif, &tmp->addresses[i]);
+
+					if (tmp->fallback_interfaces) {
+						interface_reference(&tmpfbif->next, tmp->fallback_interfaces, MDL);
+						interface_dereference(&tmp->fallback_interfaces, MDL);
+					}
+					interface_reference(&tmp->fallback_interfaces, tmpfbif, MDL);
+				}
+			}
+
 			break;
 		}
 
@@ -1091,9 +1137,9 @@ void reinitialize_interfaces ()
 isc_result_t got_one (h)
 	omapi_object_t *h;
 {
-	struct sockaddr_in from;
+	struct sockaddr_in from, to;
 	struct hardware hfrom;
-	struct iaddr ifrom;
+	struct iaddr ifrom, ito;
 	int result;
 	union {
 		unsigned char packbuf [4095]; /* Packet input buffer.
@@ -1107,9 +1153,9 @@ isc_result_t got_one (h)
 		return DHCP_R_INVALIDARG;
 	ip = (struct interface_info *)h;
 
-      again:
+again:
 	if ((result =
-	     receive_packet (ip, u.packbuf, sizeof u, &from, &hfrom)) < 0) {
+	     receive_packet (ip, u.packbuf, sizeof u, &from, &to, &hfrom)) < 0) {
 		log_error ("receive_packet failed on %s: %m", ip -> name);
 		return ISC_R_UNEXPECTED;
 	}
@@ -1148,11 +1194,12 @@ isc_result_t got_one (h)
 #endif
 
 	if (bootp_packet_handler) {
-		ifrom.len = 4;
-		memcpy (ifrom.iabuf, &from.sin_addr, ifrom.len);
+		ifrom.len = ito.len = 4;
+		memcpy(ifrom.iabuf, &from.sin_addr, ifrom.len);
+		memcpy(ito.iabuf, &to.sin_addr, ito.len);
 
 		(*bootp_packet_handler) (ip, &u.packet, (unsigned)result,
-					 from.sin_port, ifrom, &hfrom);
+					 from.sin_port, ifrom, ito, &hfrom);
 	}
 
 	/* If there is buffered data, read again.    This is for, e.g.,

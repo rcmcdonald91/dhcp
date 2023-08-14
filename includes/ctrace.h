@@ -36,6 +36,7 @@ typedef struct {
 typedef struct {
 	u_int32_t index;
 	struct iaddr from;
+	struct iaddr to;
 	u_int16_t from_port;
 	struct hardware hfrom;
 	u_int8_t havehfrom;

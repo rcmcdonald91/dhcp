@@ -183,7 +183,7 @@ static void omapi_listener_start (void *foo)
 
 #define DHCPD_USAGEC \
 "             [-pf pid-file] [--no-pid] [-s server]\n" \
-"             [if0 [...ifN]]"
+"             [if0[/listen-address] [...ifN[/listen-address]]]"
 
 #define DHCPD_USAGEH "{--version|--help|-h}"
 
@@ -536,26 +536,89 @@ main(int argc, char **argv) {
 		} else if (argv [i][0] == '-') {
 			usage("Unknown command %s", argv[i]);
 		} else {
-			struct interface_info *tmp =
-				(struct interface_info *)0;
-			if (strlen(argv[i]) >= sizeof(tmp->name))
+			struct interface_info *tmpif, *tmpfbif;
+
+			/* parse interface/listen-address */
+			char *ifname = strsep(&argv[i], "/");
+
+			if (strlen(ifname) >= sizeof(tmpif->name))
 				log_fatal("%s: interface name too long "
 					  "(is %ld)",
-					  argv[i], (long)strlen(argv[i]));
-			result = interface_allocate (&tmp, MDL);
-			if (result != ISC_R_SUCCESS)
-				log_fatal ("Insufficient memory to %s %s: %s",
-					   "record interface", argv [i],
-					   isc_result_totext (result));
-			strcpy (tmp -> name, argv [i]);
-			if (interfaces) {
-				interface_reference (&tmp -> next,
-						     interfaces, MDL);
-				interface_dereference (&interfaces, MDL);
+					  ifname, (long)strlen(ifname));
+
+			for (tmpif = interfaces; tmpif != NULL; tmpif = tmpif->next) {
+				if (!strcmp(tmpif->name, ifname))
+					break;
 			}
-			interface_reference (&interfaces, tmp, MDL);
-			tmp -> flags = INTERFACE_REQUESTED;
+
+			/* must be new, so allocate a new interface object */
+			if (tmpif == NULL) {
+				result = interface_allocate(&tmpif, MDL);
+				if (result != ISC_R_SUCCESS)
+					log_fatal("Insufficient memory to %s %s: %s",
+						  "record interface", ifname,
+						  isc_result_totext(result));
+
+				strcpy(tmpif->name, ifname);
+				tmpif->fallback_interfaces = NULL;
+				tmpif->flags = INTERFACE_REQUESTED;
+
+				if (interfaces) {
+					interface_reference(&tmpif->next, interfaces, MDL);
+					interface_dereference(&interfaces, MDL);
+				}
+				interface_reference(&interfaces, tmpif, MDL);
+			}
+
+			/* argv[i] now contains the listen-address, if one was set */
+			if (argv[i]) {
+				struct in_addr listen4;
+				struct in6_addr listen6;
+
+				isc_boolean_t ipv4 = ISC_FALSE;
+				isc_boolean_t ipv6 = ISC_FALSE;
+
+				/* make sure we haven't seen this listen-address before on this interface */
+				tmpfbif = NULL;
+				for (tmpfbif = tmpif->fallback_interfaces; tmpfbif != NULL; tmpfbif = tmpfbif->next) {
+					if (!strcmp(tmpfbif->name, argv[i]))
+						goto nextargv;
+				}
+
+				/* determine the address family of this listen-address */
+				if (inet_pton(AF_INET, argv[i], &listen4) == 1)
+					ipv4 = ISC_TRUE;
+				else if (inet_pton(AF_INET6, argv[i], &listen6) == 1)
+					ipv6 = ISC_TRUE;
+
+				/* perform some input validation, and provide useful warning messages */
+				if ((ipv4 == ISC_FALSE) && (ipv6 == ISC_FALSE))
+					log_fatal("inet_pton: unable to convert: %s", argv[i]);
+				if ((local_family == AF_INET) && (ipv6 == ISC_TRUE))
+					log_fatal("listen-address: IPv6 address provided (%s), expecting IPv4 address", argv[i]);
+				if ((local_family == AF_INET6) && (ipv4 == ISC_TRUE))
+					log_fatal("listen-address: IPv4 address provided (%s), expecting IPv6 address", argv[i]);
+
+				result = interface_allocate(&tmpfbif, MDL);
+				if (result != ISC_R_SUCCESS)
+					log_fatal("Insufficient memory to %s %s: %s",
+						  "record interface", ifname,
+						  isc_result_totext (result));
+
+				strcpy(tmpfbif->name, "fallback");
+				if (local_family == AF_INET)
+					add_ipv4_addr_to_interface(tmpfbif, &listen4);
+				if (local_family == AF_INET6)
+					add_ipv6_addr_to_interface(tmpfbif, &listen6);
+
+				if (tmpif->fallback_interfaces) {
+					interface_reference(&tmpfbif->next, tmpif->fallback_interfaces, MDL);
+					interface_dereference(&tmpif->fallback_interfaces, MDL);
+				}
+				interface_reference(&tmpif->fallback_interfaces, tmpfbif, MDL);
+			}
 		}
+nextargv:
 	}
 
 #if defined(DHCPv6) && defined(DHCP4o6)
@@ -907,7 +970,7 @@ main(int argc, char **argv) {
 		local_family = real_family;
 	} else
 #endif /* DHCPv6 && DHCP4o6 */
-	discover_interfaces(DISCOVER_SERVER);
+		discover_interfaces(DISCOVER_SERVER);
 
 #ifdef DHCPv6
 	/*

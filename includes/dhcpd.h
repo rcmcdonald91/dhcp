@@ -403,6 +403,7 @@ struct option_state {
 
 /* A dhcp packet and the pointers to its option values. */
 struct packet {
+	struct iaddr to;
 	struct dhcp_packet *raw;
 	int refcnt;
 	unsigned packet_length;
@@ -1428,6 +1429,10 @@ struct interface_info {
 	struct hardware dlpi_broadcast_addr;
 # endif /* DLPI_SEND || DLPI_RECEIVE */
 	struct hardware anycast_mac_addr;
+
+	struct interface_info *fallback_interfaces;
+
+	isc_boolean_t real_interface;
 };
 
 struct hardware_link {
@@ -2083,7 +2088,7 @@ struct option_cache *lookup_linked_option (struct universe *,
 					   struct option_state *, unsigned);
 void do_packet (struct interface_info *,
 		struct dhcp_packet *, unsigned,
-		unsigned int, struct iaddr, struct hardware *);
+		unsigned int, struct iaddr, struct iaddr, struct hardware *);
 void do_packet6(struct interface_info *, const char *,
 		int, int, const struct iaddr *, isc_boolean_t);
 int packet6_len_okay(const char *, int);
@@ -2731,7 +2736,8 @@ void if_register_receive (struct interface_info *);
 void if_deregister_receive (struct interface_info *);
 ssize_t receive_packet (struct interface_info *,
 			unsigned char *, size_t,
-			struct sockaddr_in *, struct hardware *);
+			struct sockaddr_in *, struct sockaddr_in *,
+			struct hardware *);
 #endif
 #if defined (USE_BPF_SEND)
 int can_unicast_without_arp (struct interface_info *);
@@ -2842,6 +2848,7 @@ void maybe_setup_fallback (void);
 /* discover.c */
 extern struct interface_info *interfaces,
 	*dummy_interfaces, *fallback_interface;
+
 extern struct protocol *protocols;
 extern int quiet_interface_discovery;
 isc_result_t interface_setup (void);
@@ -2865,7 +2872,7 @@ extern isc_result_t (*dhcp_interface_startup_hook) (struct interface_info *);
 extern void (*bootp_packet_handler) (struct interface_info *,
 				     struct dhcp_packet *, unsigned,
 				     unsigned int,
-				     struct iaddr, struct hardware *);
+				     struct iaddr, struct iaddr, struct hardware *);
 extern void (*dhcpv6_packet_handler)(struct interface_info *,
 				     const char *, int,
 				     int, const struct iaddr *, isc_boolean_t);
@@ -2884,6 +2891,9 @@ void discover_interfaces(int);
 int setup_fallback (struct interface_info **, const char *, int);
 int if_readsocket (omapi_object_t *);
 void reinitialize_interfaces (void);
+
+void add_ipv4_addr_to_interface(struct interface_info *, const struct in_addr *);
+void add_ipv6_addr_to_interface(struct interface_info *, const struct in6_addr *);
 
 /* dispatch.c */
 void set_time(TIME);
@@ -3112,7 +3122,7 @@ ssize_t decode_hw_header (struct interface_info *, unsigned char *,
 			  unsigned, struct hardware *);
 ssize_t decode_udp_ip_header (struct interface_info *, unsigned char *,
 			      unsigned, struct sockaddr_in *,
-			      unsigned, unsigned *, int);
+			      struct sockaddr_in *, unsigned, unsigned *, int);
 
 /* ethernet.c */
 void assemble_ethernet_header (struct interface_info *, unsigned char *,

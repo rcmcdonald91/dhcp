@@ -237,6 +237,7 @@ ssize_t decode_hw_header (interface, buf, bufix, from)
  * \param bufix - where to start processing the buffer, previous
  *                routines may have processed parts of the buffer already
  * \param from - space to return the address of the packet sender
+ * \param to - space to return the address of the packet destination
  * \param buflen - remaining length of the buffer, this will have been
  *                 decremented by bufix by the caller
  * \param rbuflen - space to return the length of the payload from the udp
@@ -251,8 +252,8 @@ ssize_t decode_hw_header (interface, buf, bufix, from)
 ssize_t
 decode_udp_ip_header(struct interface_info *interface,
 		     unsigned char *buf, unsigned bufix,
-		     struct sockaddr_in *from, unsigned buflen,
-		     unsigned *rbuflen, int csum_ready)
+		     struct sockaddr_in *from, struct sockaddr_in *to,
+		     unsigned buflen, unsigned *rbuflen, int csum_ready)
 {
   unsigned char *data;
   struct ip ip;
@@ -356,8 +357,9 @@ decode_udp_ip_header(struct interface_info *interface,
 	ip_packets_seen = 0;
   }
 
-  /* Copy out the IP source address... */
+  /* Copy out the src and dst IP addresses... */
   memcpy(&from->sin_addr, &ip.ip_src, 4);
+  memcpy(&to->sin_addr, &ip.ip_dst, 4);
 
   data = upp + sizeof(udp);
   len = ulen - sizeof(udp);

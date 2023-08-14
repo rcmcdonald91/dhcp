@@ -202,6 +202,7 @@ void trace_inpacket_input (trace_type_t *ttype, unsigned len, char *buf)
 				 len - sizeof *tip,
 				 tip -> from_port,
 				 tip -> from,
+				 tip -> to,
 				 (tip -> havehfrom ?
 				  &tip -> hfrom
 				  : (struct hardware *)0));
